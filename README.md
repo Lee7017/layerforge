@@ -1,3 +1,11 @@
+## AI 写实包装图集（已入库）
+
+- **[直接打开网页编辑 20 瓶包装图集](https://lee7017.github.io/layerforge/?version=ai-photo-20261108)**：默认内置 27 个图层，其中 20 个瓶子可独立移动、隐藏和调整。
+- **[从 GitHub 下载 27 图层 PSD](https://github.com/Lee7017/layerforge/raw/refs/heads/main/assets/psd/chemical-packaging-ai-20-bottles.psd)**：14,083,942 字节，GitHub Actions 校验 SHA-256 `bfce00d0ae15044740bdf139468dfb064e23c3e70a0b1735f619a385dc7e335e`。
+- **[查看网页内置的分层工程 JSON](https://github.com/Lee7017/layerforge/blob/main/public/examples/chemical-packaging-20.json)**：写实图层采用 WebP 压缩内嵌，方便 GitHub Pages 静态加载。
+- 如果浏览器还显示旧几何示意图，刷新页面，点击顶部 **「AI写实20瓶图集」** 替换旧项目。
+- **注意**：ChemSource / CS-1280 / 1 kg 等 AI 合成文字只是演示信息，不应当作真实化工厂产品规格或直接用于生产包装印刷。
+
 # LayerForge · PSD 分层网页编辑器
 
 ## 不用导入 PSD：打开网页即可修改 20 瓶示例
