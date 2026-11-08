@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import Konva from 'konva';
-import { Stage, Layer as KonvaLayer, Rect, Image as KonvaImage, Text as KonvaText, Transformer } from 'react-konva';
+import { Stage, Layer as KonvaLayer, Rect, Image as KonvaImage, Text as KonvaText, Transformer, Line, Circle } from 'react-konva';
 import { clamp, createDemo, makeId } from './types';
-import type { EditorLayer, Project, ShapeLayer, TextLayer } from './types';
+import type { EditorLayer, PictureLayer, Project, QuantityLayout, ShapeLayer, TextLayer } from './types';
 import { exportPng, exportPsd, exportProject, fileToDataUrl, imageFilesToLayers, importProject, importPsd, loadImage } from './io';
 import { readSession, writeSession } from './storage';
+import { cutOutBottle, makeBottleGrid, newQuantityLayout } from './quantity';
+import type { Point } from './quantity';
 
 const zoomOptions = [.25, .4, .5, .65, .8, 1, 1.25, 1.5, 2];
 type CanvasObjectProps = {
   layer: EditorLayer;
   selected: boolean;
+  tracing: boolean;
   onSelect: (id: string) => void;
   onChange: (id: string, patch: Partial<EditorLayer>) => void;
 };
 
-function CanvasObject({ layer, selected, onSelect, onChange }: CanvasObjectProps) {
+function CanvasObject({ layer, selected, tracing, onSelect, onChange }: CanvasObjectProps) {
   const nodeRef = useRef<Konva.Node | null>(null);
   const trRef = useRef<Konva.Transformer | null>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -35,7 +38,7 @@ function CanvasObject({ layer, selected, onSelect, onChange }: CanvasObjectProps
   const common = {
     x: layer.x, y: layer.y, width: layer.width, height: layer.height,
     rotation: layer.rotation, opacity: layer.opacity,
-    draggable: !layer.locked, listening: !layer.locked,
+    draggable: !layer.locked && !tracing, listening: !layer.locked && !tracing,
     onClick: () => onSelect(layer.id),
     onTap: () => onSelect(layer.id),
     onDragEnd: (event: Konva.KonvaEventObject<DragEvent>) => {
@@ -63,7 +66,7 @@ function CanvasObject({ layer, selected, onSelect, onChange }: CanvasObjectProps
         <KonvaText {...common} text={layer.text} fontFamily={layer.fontFamily} fontSize={layer.fontSize}
           fontStyle={layer.bold ? 'bold' : 'normal'} fill={layer.color} lineHeight={1.2}
           wrap="char" ref={nodeRef as Ref<Konva.Text>} />}
-    {selected && !layer.locked &&
+    {selected && !layer.locked && !tracing &&
       <Transformer ref={trRef} rotateEnabled enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right', 'middle-left', 'middle-right', 'top-center', 'bottom-center']}
         keepRatio={layer.type === 'image'} flipEnabled={false} borderStroke="#a6ff94" anchorFill="#a6ff94" anchorStroke="#26253f"
         anchorSize={10} rotateAnchorOffset={24} boundBoxFunc={(_old, next) =>
@@ -93,6 +96,11 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [saved, setSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const originalInputRef = useRef<HTMLInputElement>(null);
+  const [quantityPanel, setQuantityPanel] = useState(false);
+  const [tracing, setTracing] = useState(false);
+  const [outline, setOutline] = useState<Point[]>([]);
+  const [traceSourceId, setTraceSourceId] = useState<string | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const undoStack = useRef<Project[]>([]);
   const redoStack = useRef<Project[]>([]);
@@ -139,6 +147,7 @@ export default function App() {
       const target = e.target as HTMLElement;
       if (target.closest('input,textarea,[contenteditable=true]')) return;
       const mod = e.ctrlKey || e.metaKey;
+      if (e.key === 'Escape' && tracing) { e.preventDefault(); setTracing(false); setOutline([]); return; }
       if (mod && e.key.toLowerCase() === 'z') {
         e.preventDefault(); (e.shiftKey ? redo : undo)();
       } else if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
@@ -160,9 +169,81 @@ export default function App() {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [project, selectedId, commit, undo, redo]);
+  }, [project, selectedId, commit, undo, redo, tracing]);
 
   const selected = project.layers.find(l => l.id === selectedId) ?? null;
+  const layout = project.quantity;
+  const sample = (project.layers.find(l => l.id === layout?.sampleId && l.type === 'image') ?? null) as PictureLayer | null;
+  const gridLayers = layout ? project.layers.filter(l => l.quantityGroupId === layout.groupId) : [];
+  const visibleCount = gridLayers.filter(l => l.visible).length;
+  const expectedCount = layout ? layout.rows * layout.columns : 0;
+  const patchLayout = (patch: Partial<QuantityLayout>) => {
+    if (!layout) return;
+    const next = { ...layout, ...patch };
+    if (next.rows * next.columns > 120) { setNotice('一次最多排列 120 瓶，请先减少行数或列数。'); return; }
+    commit({ ...project, quantity: next });
+  };
+  const useSelectedSample = () => {
+    if (!selected || selected.type !== 'image') {
+      setNotice('请先选中一张独立的单瓶 PNG 图片图层。'); return;
+    }
+    if (!window.confirm('将选中图片作为单瓶模板并隐藏它，之后可一键排列 20 瓶。请确认这张图片仅含一瓶（最好透明背景），不是整张装箱图。')) return;
+    const nextLayout = newQuantityLayout(selected);
+    commit({ ...project,
+      layers: project.layers.filter(l => l.quantityGroupId !== layout?.groupId)
+        .map(l => l.id === selected.id ? { ...l, visible: false, locked: true } : l),
+      quantity: nextLayout,
+    });
+    setQuantityPanel(true);
+    setNotice('已设为单瓶模板。设置行数、列数和起点，再点击「生成瓶阵」。');
+  };
+  const beginTrace = () => {
+    if (!selected || selected.type !== 'image') { setNotice('请先从左侧图层列表中选中要提取单瓶的原始图片。'); return; }
+    if (selected.rotation !== 0) { setNotice('请先将源图层旋转角度设置为 0。'); return; }
+    setTraceSourceId(selected.id); setOutline([]); setTracing(true); setNotice('描边模式：沿单瓶外轮廓逐点点击。至少 3 个点，然后点击「完成提取」；按 Esc 可取消。');
+  };
+  const finishTrace = async () => {
+    const source = project.layers.find(l => l.id === traceSourceId);
+    if (!source || source.type !== 'image') { setTracing(false); setNotice('源图层不存在'); return; }
+    try {
+      const bottle = await cutOutBottle(source, outline);
+      const nextLayout = newQuantityLayout(bottle);
+      commit({ ...project, layers: [bottle, ...project.layers.filter(l => l.quantityGroupId !== layout?.groupId)], quantity: nextLayout });
+      setSelectedId(null); setTracing(false); setOutline([]); setTraceSourceId(null);
+      setNotice('已经沿描边提取单瓶，并作为隐藏素材保存。请调整瓶阵起点和间距；原图里的旧瓶子还需要另行遮盖或替换底图。');
+    } catch (err) { setNotice(`提取失败：${err instanceof Error ? err.message : String(err)}`); }
+  };
+  const applyGrid = () => {
+    if (!layout || !sample) { setNotice('请先设置一个单瓶模板。'); return; }
+    if (gridLayers.length > 0 && !window.confirm('重新生成会覆盖当前瓶阵里每个瓶子的手动位置调整。继续吗？')) return;
+    try {
+      const generated = makeBottleGrid(sample, layout);
+      const remainder = project.layers.filter(l => l.quantityGroupId !== layout.groupId);
+      commit({ ...project, layers: [...generated, ...remainder] });
+      setSelectedId(generated[0]?.id ?? null);
+      setNotice(`已生成 ${generated.length} 个独立瓶子图层（${layout.columns} 列 × ${layout.rows} 排），可以逐个拖动。`);
+    } catch (err) { setNotice(`生成失败：${err instanceof Error ? err.message : String(err)}`); }
+  };
+  const importOriginal = async (file: File) => {
+    setBusy(true);
+    try {
+      if (!/^image\/(png|jpeg|webp)/i.test(file.type)) throw new Error('请上传 PNG、JPG 或 WebP 原图');
+      const src = await fileToDataUrl(file);
+      const img = await loadImage(src);
+      if (img.naturalWidth * img.naturalHeight > 30_000_000) throw new Error('原图超过 3000 万像素，请先缩小');
+      if (!window.confirm('以这张 AI 图片创建新画布？当前画布可以先下载 JSON 备份，再继续。')) return;
+      const background: PictureLayer = {
+        type: 'image', id: makeId(), name: 'AI 原图（可锁定）', src, x: 0, y: 0,
+        width: img.naturalWidth, height: img.naturalHeight, rotation: 0, opacity: 1,
+        visible: true, locked: true,
+      };
+      const next: Project = { version: 1, title: file.name.replace(/\.[^.]+$/, ''),
+        width: img.naturalWidth, height: img.naturalHeight, layers: [background] };
+      commit(next); setSelectedId(background.id); setOutline([]); setTracing(false); setQuantityPanel(true);
+      setNotice('AI 原图已设为画布。右侧进入数量精修：可以选中原图并描边提取单瓶。');
+    } catch (err) { setNotice(`打开原图失败：${err instanceof Error ? err.message : String(err)}`); }
+    finally { setBusy(false); if (originalInputRef.current) originalInputRef.current.value = ''; }
+  };
   const patchLayer = (id: string, patch: Partial<EditorLayer>) => {
     const current = project.layers.find(l => l.id === id);
     if (!current) return;
@@ -226,12 +307,20 @@ export default function App() {
         setSelectedId(added[0]?.id ?? null);
         setNotice(`成功加入 ${images.length} 张图片。素材以独立图层保留，可直接拖动。`);
       }
-      if (next !== project) commit(next);
+      if (next !== project) { commit(next); setTracing(false); setOutline([]); }
       else if (!images.length && !psdFile && !jsonFile) throw new Error('请导入 PSD、项目 JSON 或图片文件');
     } catch (err) { setNotice(`操作失败：${err instanceof Error ? err.message : String(err)}`); }
     finally { setBusy(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
   };
   const runExport = async (format: 'png' | 'psd' | 'json') => {
+    if (format !== 'json' && layout && gridLayers.length !== expectedCount) {
+      setNotice(`数量检查未通过：设置的是 ${expectedCount} 瓶，实际瓶阵有 ${gridLayers.length} 个图层。请点击「生成/更新瓶阵」。`);
+      return;
+    }
+    if (format !== 'json' && layout && visibleCount !== expectedCount) {
+      setNotice(`数量检查未通过：目标 ${expectedCount} 瓶，目前只有 ${visibleCount} 瓶可见。请显示被隐藏的瓶子或重新生成。`);
+      return;
+    }
     setBusy(true); setNotice(`正在导出 ${format.toUpperCase()}…`);
     try {
       if (format === 'png') await exportPng(project);
@@ -249,6 +338,8 @@ export default function App() {
   };
 
   return <div className="app">
+    <input ref={originalInputRef} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp"
+      onChange={e => { const file = e.currentTarget.files?.[0]; if (file) void importOriginal(file); }} />
     <input ref={fileInputRef} className="sr-only" type="file" multiple
       accept=".psd,.json,image/png,image/jpeg,image/webp,image/gif"
       onChange={e => void processFiles(Array.from(e.currentTarget.files ?? []))} />
@@ -256,6 +347,7 @@ export default function App() {
       <div className="brand"><span className="brand-mark">◈</span><div><strong>LayerForge</strong><small>分层画布</small></div></div>
       <div className="top-actions">
         <button className="button primary" disabled={busy} onClick={() => fileInputRef.current?.click()}><C>＋</C> 打开 PSD / 导入素材</button>
+        <button className={`button ${quantityPanel ? 'success' : ''}`} onClick={() => { setQuantityPanel(v => !v); setTracing(false); setOutline([]); }}>▦ 数量精修</button>
         <span className="line" />
         <button className="button" disabled={busy} onClick={() => void runExport('json')}>保存项目</button>
         <button className="button" disabled={busy} onClick={() => void runExport('png')}>导出 PNG</button>
@@ -317,11 +409,26 @@ export default function App() {
           <div className="canvas-centering">
             <div className="canvas-board" style={{ width: project.width * zoom, height: project.height * zoom }}>
               <Stage width={project.width * zoom} height={project.height * zoom} scaleX={zoom} scaleY={zoom}
-                onMouseDown={e => { if (e.target === e.target.getStage()) setSelectedId(null); }}
-                onTouchStart={e => { if (e.target === e.target.getStage()) setSelectedId(null); }}>
+                onMouseDown={e => {
+                  if (tracing) { const pos = e.target.getStage()?.getPointerPosition();
+                    if (pos) setOutline(points => [...points, { x: Math.round(pos.x / zoom), y: Math.round(pos.y / zoom) }]);
+                  } else if (e.target === e.target.getStage()) setSelectedId(null);
+                }}
+                onTouchStart={e => {
+                  if (tracing) { const pos = e.target.getStage()?.getPointerPosition();
+                    if (pos) setOutline(points => [...points, { x: Math.round(pos.x / zoom), y: Math.round(pos.y / zoom) }]);
+                  } else if (e.target === e.target.getStage()) setSelectedId(null);
+                }}>
                 <KonvaLayer>
                   {[...project.layers].reverse().map(layer => <CanvasObject key={layer.id} layer={layer}
-                    selected={selectedId === layer.id} onSelect={setSelectedId} onChange={patchLayer} />)}
+                    selected={selectedId === layer.id} tracing={tracing} onSelect={setSelectedId} onChange={patchLayer} />)}
+                  {tracing && outline.length > 0 && <>
+                    <Line points={outline.flatMap(p => [p.x, p.y])} closed={outline.length > 2}
+                      stroke="#a6ff94" strokeWidth={2 / zoom} dash={[6 / zoom, 3 / zoom]}
+                      fill="rgba(166,255,148,.12)" listening={false} />
+                    {outline.map((p, i) => <Circle key={i} x={p.x} y={p.y} radius={4 / zoom}
+                      fill="#a6ff94" stroke="#1c2030" strokeWidth={1 / zoom} listening={false} />)}
+                  </>}
                 </KonvaLayer>
               </Stage>
             </div>
@@ -330,8 +437,53 @@ export default function App() {
         <div className="statusbar"><span className="status-dot" />{busy ? '处理中…' : notice}<span className="autosave">{saved ? '● 已自动保存' : '○ 未保存'}</span></div>
       </main>
       <aside className="sidebar properties">
-        <div className="side-heading"><span>属性</span><span className="tiny">编辑器</span></div>
-        {selected ? <>
+        <div className="side-heading"><span>{quantityPanel ? '数量精修' : '属性'}</span><span className="tiny">{quantityPanel ? '瓶数控制' : '编辑器'}</span></div>
+        {quantityPanel ? <div className="quantity-panel">
+          <div className="property-section"><h3>① 打开 AI 成品图</h3>
+            <button className="button full" disabled={busy} onClick={() => originalInputRef.current?.click()}>上传原图并建立画布</button>
+            <p className="small-help">如果已经导入 PSD，也可以直接选中其中的图片图层。</p>
+          </div>
+          <div className="property-section"><h3>② 提取一只瓶子</h3>
+            <button className="button full" disabled={!selected || selected.type !== 'image' || tracing} onClick={beginTrace}>从选中图片描边提取单瓶</button>
+            {tracing && <><p className="small-help accent">在画布上依次点击瓶子轮廓（当前 {outline.length} 点）。</p>
+              <div className="quantity-row"><button className="button" disabled={!outline.length} onClick={() => setOutline(v => v.slice(0,-1))}>撤销一个点</button>
+                <button className="button success" disabled={outline.length < 3} onClick={() => void finishTrace()}>完成提取</button></div>
+              <button className="button full" onClick={() => { setTracing(false); setOutline([]); }}>取消描边</button></>}
+            <div className="small-help">也可以导入已经抠好透明背景的单瓶 PNG，选中后直接设置为模板。</div>
+            <button className="button full" disabled={!selected || selected.type !== 'image' || tracing} onClick={useSelectedSample}>使用选中图片作为单瓶模板</button>
+            {sample && <div className="sample-indicator">✓ 单瓶模板：{sample.name}</div>}
+          </div>
+          <div className="property-section"><h3>③ 精确设置瓶数</h3>
+            {layout ? <>
+              <div className="field-grid">
+                <NumberControl label="列数" value={layout.columns} min={1} max={120} onChange={columns => patchLayout({ columns: Math.round(columns) })}/>
+                <NumberControl label="排数" value={layout.rows} min={1} max={120} onChange={rows => patchLayout({ rows: Math.round(rows) })}/>
+              </div>
+              <div className="quantity-total">目标 <strong>{expectedCount}</strong> 瓶 <span>{layout.columns} × {layout.rows}</span></div>
+              <div className="field-grid">
+                <NumberControl label="起点 X" value={layout.originX} onChange={originX => patchLayout({originX})}/>
+                <NumberControl label="起点 Y" value={layout.originY} onChange={originY => patchLayout({originY})}/>
+                <NumberControl label="单瓶宽" value={layout.itemWidth} min={1} max={12000} onChange={itemWidth => patchLayout({itemWidth})}/>
+                <NumberControl label="单瓶高" value={layout.itemHeight} min={1} max={12000} onChange={itemHeight => patchLayout({itemHeight})}/>
+                <NumberControl label="列间距" value={layout.gapX} min={-12000} onChange={gapX => patchLayout({gapX})}/>
+                <NumberControl label="排间距" value={layout.gapY} min={-12000} onChange={gapY => patchLayout({gapY})}/>
+                <NumberControl label="逐排横偏移" value={layout.rowShiftX} onChange={rowShiftX => patchLayout({rowShiftX})}/>
+                <NumberControl label="逐列竖偏移" value={layout.columnShiftY} onChange={columnShiftY => patchLayout({columnShiftY})}/>
+                <NumberControl label="每排缩放倍数" value={layout.rowScale} min={.5} max={1.5} step={.01} onChange={rowScale => patchLayout({rowScale})}/>
+              </div>
+              <button className="button success full" disabled={expectedCount > 120 || !sample} onClick={applyGrid}>生成 / 更新 {expectedCount} 个瓶子图层</button>
+              <div className={`quantity-audit ${gridLayers.length === expectedCount && visibleCount === expectedCount ? 'ok' : 'warn'}`}>
+                已生成 {gridLayers.length} 层 · 可见 {visibleCount} 瓶 · 目标 {expectedCount} 瓶
+              </div>
+              <p className="small-help">生成后可以逐瓶拖动。若调整行列数，需要点击「更新」才会改变图层。最多 120 瓶。</p>
+            </> : <p className="small-help">先完成步骤②，才会出现数量和排列设置。</p>}
+          </div>
+          <div className="property-section"><h3>④ 修复原图、导出</h3>
+            <p className="small-help">原图中的旧瓶子不会自动消失。请先导入不含旧瓶阵的箱体底图，或用图层遮盖并修补；再把新瓶阵放到正确位置。箱沿遮挡也应单独放在瓶阵上面。</p>
+            <p className="small-help">数量检查只统计本工具生成的瓶阵，不识别原图中剩余瓶子；导出前必须目视核对。</p>
+            <button className="button full" onClick={() => setQuantityPanel(false)}>返回普通图层属性</button>
+          </div>
+        </div> : selected ? <>
           <div className="properties-title"><div className="property-badge">{selected.type === 'text' ? 'T' : selected.type === 'shape' ? '▢' : '▧'}</div>
             <div><strong>{selected.name}</strong><small>{selected.type === 'text' ? '文本图层' : selected.type === 'image' ? '图片图层' : '形状图层'}</small></div></div>
           <div className="property-section"><h3>图层名称</h3>
