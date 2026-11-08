@@ -2,14 +2,27 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import Konva from 'konva';
 import { Stage, Layer as KonvaLayer, Rect, Image as KonvaImage, Text as KonvaText, Transformer, Line, Circle } from 'react-konva';
-import { clamp, createDemo, makeId } from './types';
+import { clamp, createDemo, makeId, validProject } from './types';
 import type { EditorLayer, PictureLayer, Project, QuantityLayout, ShapeLayer, TextLayer } from './types';
 import { exportPng, exportPsd, exportProject, fileToDataUrl, imageFilesToLayers, importProject, importPsd, loadImage } from './io';
 import { readSession, writeSession } from './storage';
 import { cutOutBottle, makeBottleGrid, newQuantityLayout } from './quantity';
+import { createPackagingFallback } from './packagingExample';
 import type { Point } from './quantity';
 
 const zoomOptions = [.25, .4, .5, .65, .8, 1, 1.25, 1.5, 2];
+
+// Bundled example is part of the static GitHub Pages build. No PSD upload needed.
+async function loadPackagingExample(): Promise<Project> {
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}examples/chemical-packaging-20.json`);
+    if (response.ok) {
+      const data: unknown = await response.json();
+      if (validProject(data)) return data;
+    }
+  } catch { /* In offline/local previews, fall back to the illustrated project. */ }
+  return createPackagingFallback();
+}
 type CanvasObjectProps = {
   layer: EditorLayer;
   selected: boolean;
@@ -107,9 +120,27 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    readSession().then(p => {
-      if (active && p) { setProject(p); setNotice('已恢复上次在此浏览器编辑的项目。'); }
-    }).catch(() => {}).finally(() => { if (active) setReady(true); });
+    const initialize = async () => {
+      try {
+        const savedProject = await readSession();
+        if (!active) return;
+        if (savedProject) {
+          setProject(savedProject);
+          setQuantityPanel(Boolean(savedProject.quantity));
+          setNotice('已恢复上次在此浏览器编辑的项目；如需重新打开包装图集，请点击顶部「20瓶模板」。');
+        } else {
+          const example = await loadPackagingExample();
+          if (!active) return;
+          setProject(example);
+          setQuantityPanel(true);
+          setZoom(.5);
+          setNotice(example.title.includes('结构示意') ? '已自动打开包装数量精修示意图（并非上一版照片 PSD）。已有 20 个独立瓶子图层；可直接修改并导出 PSD。' : '已自动打开原图包装模板：5列×4排，20个独立瓶子图层；无需导入 PSD。');
+        }
+      } catch (err) {
+        if (active) setNotice(`模板加载失败，仍可手动导入素材：${err instanceof Error ? err.message : String(err)}`);
+      } finally { if (active) setReady(true); }
+    };
+    void initialize();
     return () => { active = false; };
   }, []);
 
@@ -171,6 +202,22 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, [project, selectedId, commit, undo, redo, tracing]);
 
+  const reopenExample = async () => {
+    if (busy) return;
+    if (!window.confirm('重新打开内置 20 瓶包装图集会替换当前编辑内容。需要保留修改请先点「保存项目」。继续吗？')) return;
+    setBusy(true);
+    try {
+      const example = await loadPackagingExample();
+      commit(example);
+      setSelectedId(null);
+      setQuantityPanel(true);
+      setTracing(false);
+      setOutline([]);
+      setZoom(.5);
+      setNotice(example.title.includes('结构示意') ? '已打开内置 20 瓶示意图。20 个瓶子可直接编辑；原照片 PSD 尚未上传至仓库。' : '已打开原图包装图集，可直接编辑 20 个独立瓶子图层并导出 PSD。');
+    } catch (err) { setNotice(`打开内置模板失败：${err instanceof Error ? err.message : String(err)}`); }
+    finally { setBusy(false); }
+  };
   const selected = project.layers.find(l => l.id === selectedId) ?? null;
   const layout = project.quantity;
   const sample = (project.layers.find(l => l.id === layout?.sampleId && l.type === 'image') ?? null) as PictureLayer | null;
@@ -346,7 +393,8 @@ export default function App() {
     <header className="topbar">
       <div className="brand"><span className="brand-mark">◈</span><div><strong>LayerForge</strong><small>分层画布</small></div></div>
       <div className="top-actions">
-        <button className="button primary" disabled={busy} onClick={() => fileInputRef.current?.click()}><C>＋</C> 打开 PSD / 导入素材</button>
+        <button className="button primary" disabled={busy || !ready} onClick={() => void reopenExample()}><C>▣</C> 20瓶包装图集</button>
+        <button className="button" disabled={busy} onClick={() => fileInputRef.current?.click()}><C>＋</C> 导入 PSD / 图片</button>
         <button className={`button ${quantityPanel ? 'success' : ''}`} onClick={() => { setQuantityPanel(v => !v); setTracing(false); setOutline([]); }}>▦ 数量精修</button>
         <span className="line" />
         <button className="button" disabled={busy} onClick={() => void runExport('json')}>保存项目</button>
@@ -360,7 +408,7 @@ export default function App() {
         <div className="add-actions">
           <button onClick={addText}>T 文字</button><button onClick={addShape}>▢ 矩形</button>
         </div>
-        <p className="hint">上传 AI 生成的透明 PNG，每张都是单独图层。</p>
+        <p className="hint">内置示例已经逐瓶分层，点击单瓶即可拖动。新素材仍可导入 PSD / PNG。</p>
         <div className="layer-list">
           {project.layers.map(layer => <div key={layer.id}
             className={`layer-row ${selectedId === layer.id ? 'active' : ''} ${!layer.visible ? 'muted' : ''}`}
@@ -479,7 +527,7 @@ export default function App() {
             </> : <p className="small-help">先完成步骤②，才会出现数量和排列设置。</p>}
           </div>
           <div className="property-section"><h3>④ 修复原图、导出</h3>
-            <p className="small-help">原图中的旧瓶子不会自动消失。请先导入不含旧瓶阵的箱体底图，或用图层遮盖并修补；再把新瓶阵放到正确位置。箱沿遮挡也应单独放在瓶阵上面。</p>
+            <p className="small-help">内置包装图集已包含箱体遮盖与 20 个瓶子图层；对其他 AI 图片，旧瓶子不会自动消失，需要另外修补背景和箱沿遮挡。</p>
             <p className="small-help">数量检查只统计本工具生成的瓶阵，不识别原图中剩余瓶子；导出前必须目视核对。</p>
             <button className="button full" onClick={() => setQuantityPanel(false)}>返回普通图层属性</button>
           </div>
