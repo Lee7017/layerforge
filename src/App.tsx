@@ -15,7 +15,7 @@ const zoomOptions = [.25, .4, .5, .65, .8, 1, 1.25, 1.5, 2];
 // Bundled example is part of the static GitHub Pages build. No PSD upload needed.
 async function loadPackagingExample(): Promise<Project> {
   try {
-    const response = await fetch(`${import.meta.env.BASE_URL}examples/chemical-packaging-20.json`);
+    const response = await fetch(`${import.meta.env.BASE_URL}examples/chemical-packaging-20.json?rev=ai-photo-20261108`);
     if (response.ok) {
       const data: unknown = await response.json();
       if (validProject(data)) return data;
@@ -124,17 +124,21 @@ export default function App() {
       try {
         const savedProject = await readSession();
         if (!active) return;
-        if (savedProject) {
+        const oldExample = Boolean(savedProject &&
+          (['grid-box-example', 'builtin-packaging-grid'].includes(savedProject.quantity?.groupId ?? '') ||
+          (savedProject.width === 2048 && savedProject.height === 1070 &&
+           /结构示意|数量精修示意|20瓶可编辑示例/.test(savedProject.title))));
+        if (savedProject && !oldExample) {
           setProject(savedProject);
           setQuantityPanel(Boolean(savedProject.quantity));
-          setNotice('已恢复上次在此浏览器编辑的项目；如需重新打开包装图集，请点击顶部「20瓶模板」。');
+          setNotice('已恢复此前的编辑项目；点击顶部「AI写实20瓶图集」可重新打开照片分层模板。');
         } else {
           const example = await loadPackagingExample();
           if (!active) return;
           setProject(example);
           setQuantityPanel(true);
           setZoom(.5);
-          setNotice(example.title.includes('结构示意') ? '已自动打开包装数量精修示意图（并非上一版照片 PSD）。已有 20 个独立瓶子图层；可直接修改并导出 PSD。' : '已自动打开原图包装模板：5列×4排，20个独立瓶子图层；无需导入 PSD。');
+          setNotice('已载入 AI 写实包装图集：27 个图层，其中 20 瓶可逐个编辑并导出 PSD。旧几何示意草稿已自动替换。');
         }
       } catch (err) {
         if (active) setNotice(`模板加载失败，仍可手动导入素材：${err instanceof Error ? err.message : String(err)}`);
@@ -214,7 +218,7 @@ export default function App() {
       setTracing(false);
       setOutline([]);
       setZoom(.5);
-      setNotice(example.title.includes('结构示意') ? '已打开内置 20 瓶示意图。20 个瓶子可直接编辑；原照片 PSD 尚未上传至仓库。' : '已打开原图包装图集，可直接编辑 20 个独立瓶子图层并导出 PSD。');
+      setNotice('已加载 AI 写实包装图集：20 个独立瓶子图层，支持直接拖拽、修改与导出 PSD。');
     } catch (err) { setNotice(`打开内置模板失败：${err instanceof Error ? err.message : String(err)}`); }
     finally { setBusy(false); }
   };
@@ -393,7 +397,7 @@ export default function App() {
     <header className="topbar">
       <div className="brand"><span className="brand-mark">◈</span><div><strong>LayerForge</strong><small>分层画布</small></div></div>
       <div className="top-actions">
-        <button className="button primary" disabled={busy || !ready} onClick={() => void reopenExample()}><C>▣</C> 20瓶包装图集</button>
+        <button className="button primary" disabled={busy || !ready} onClick={() => void reopenExample()}><C>▣</C> AI写实20瓶图集</button>
         <button className="button" disabled={busy} onClick={() => fileInputRef.current?.click()}><C>＋</C> 导入 PSD / 图片</button>
         <button className={`button ${quantityPanel ? 'success' : ''}`} onClick={() => { setQuantityPanel(v => !v); setTracing(false); setOutline([]); }}>▦ 数量精修</button>
         <span className="line" />
