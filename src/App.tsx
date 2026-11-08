@@ -437,8 +437,53 @@ export default function App() {
         <div className="statusbar"><span className="status-dot" />{busy ? '处理中…' : notice}<span className="autosave">{saved ? '● 已自动保存' : '○ 未保存'}</span></div>
       </main>
       <aside className="sidebar properties">
-        <div className="side-heading"><span>属性</span><span className="tiny">编辑器</span></div>
-        {selected ? <>
+        <div className="side-heading"><span>{quantityPanel ? '数量精修' : '属性'}</span><span className="tiny">{quantityPanel ? '瓶数控制' : '编辑器'}</span></div>
+        {quantityPanel ? <div className="quantity-panel">
+          <div className="property-section"><h3>① 打开 AI 成品图</h3>
+            <button className="button full" disabled={busy} onClick={() => originalInputRef.current?.click()}>上传原图并建立画布</button>
+            <p className="small-help">如果已经导入 PSD，也可以直接选中其中的图片图层。</p>
+          </div>
+          <div className="property-section"><h3>② 提取一只瓶子</h3>
+            <button className="button full" disabled={!selected || selected.type !== 'image' || tracing} onClick={beginTrace}>从选中图片描边提取单瓶</button>
+            {tracing && <><p className="small-help accent">在画布上依次点击瓶子轮廓（当前 {outline.length} 点）。</p>
+              <div className="quantity-row"><button className="button" disabled={!outline.length} onClick={() => setOutline(v => v.slice(0,-1))}>撤销一个点</button>
+                <button className="button success" disabled={outline.length < 3} onClick={() => void finishTrace()}>完成提取</button></div>
+              <button className="button full" onClick={() => { setTracing(false); setOutline([]); }}>取消描边</button></>}
+            <div className="small-help">也可以导入已经抠好透明背景的单瓶 PNG，选中后直接设置为模板。</div>
+            <button className="button full" disabled={!selected || selected.type !== 'image' || tracing} onClick={useSelectedSample}>使用选中图片作为单瓶模板</button>
+            {sample && <div className="sample-indicator">✓ 单瓶模板：{sample.name}</div>}
+          </div>
+          <div className="property-section"><h3>③ 精确设置瓶数</h3>
+            {layout ? <>
+              <div className="field-grid">
+                <NumberControl label="列数" value={layout.columns} min={1} max={120} onChange={columns => patchLayout({ columns: Math.round(columns) })}/>
+                <NumberControl label="排数" value={layout.rows} min={1} max={120} onChange={rows => patchLayout({ rows: Math.round(rows) })}/>
+              </div>
+              <div className="quantity-total">目标 <strong>{expectedCount}</strong> 瓶 <span>{layout.columns} × {layout.rows}</span></div>
+              <div className="field-grid">
+                <NumberControl label="起点 X" value={layout.originX} onChange={originX => patchLayout({originX})}/>
+                <NumberControl label="起点 Y" value={layout.originY} onChange={originY => patchLayout({originY})}/>
+                <NumberControl label="单瓶宽" value={layout.itemWidth} min={1} max={12000} onChange={itemWidth => patchLayout({itemWidth})}/>
+                <NumberControl label="单瓶高" value={layout.itemHeight} min={1} max={12000} onChange={itemHeight => patchLayout({itemHeight})}/>
+                <NumberControl label="列间距" value={layout.gapX} min={-12000} onChange={gapX => patchLayout({gapX})}/>
+                <NumberControl label="排间距" value={layout.gapY} min={-12000} onChange={gapY => patchLayout({gapY})}/>
+                <NumberControl label="逐排横偏移" value={layout.rowShiftX} onChange={rowShiftX => patchLayout({rowShiftX})}/>
+                <NumberControl label="逐列竖偏移" value={layout.columnShiftY} onChange={columnShiftY => patchLayout({columnShiftY})}/>
+                <NumberControl label="每排缩放倍数" value={layout.rowScale} min={.5} max={1.5} step={.01} onChange={rowScale => patchLayout({rowScale})}/>
+              </div>
+              <button className="button success full" disabled={expectedCount > 120 || !sample} onClick={applyGrid}>生成 / 更新 {expectedCount} 个瓶子图层</button>
+              <div className={`quantity-audit ${gridLayers.length === expectedCount && visibleCount === expectedCount ? 'ok' : 'warn'}`}>
+                已生成 {gridLayers.length} 层 · 可见 {visibleCount} 瓶 · 目标 {expectedCount} 瓶
+              </div>
+              <p className="small-help">生成后可以逐瓶拖动。若调整行列数，需要点击「更新」才会改变图层。最多 120 瓶。</p>
+            </> : <p className="small-help">先完成步骤②，才会出现数量和排列设置。</p>}
+          </div>
+          <div className="property-section"><h3>④ 修复原图、导出</h3>
+            <p className="small-help">原图中的旧瓶子不会自动消失。请先导入不含旧瓶阵的箱体底图，或用图层遮盖并修补；再把新瓶阵放到正确位置。箱沿遮挡也应单独放在瓶阵上面。</p>
+            <p className="small-help">数量检查只统计本工具生成的瓶阵，不识别原图中剩余瓶子；导出前必须目视核对。</p>
+            <button className="button full" onClick={() => setQuantityPanel(false)}>返回普通图层属性</button>
+          </div>
+        </div> : selected ? <>
           <div className="properties-title"><div className="property-badge">{selected.type === 'text' ? 'T' : selected.type === 'shape' ? '▢' : '▧'}</div>
             <div><strong>{selected.name}</strong><small>{selected.type === 'text' ? '文本图层' : selected.type === 'image' ? '图片图层' : '形状图层'}</small></div></div>
           <div className="property-section"><h3>图层名称</h3>
