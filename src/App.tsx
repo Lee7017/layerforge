@@ -338,6 +338,8 @@ export default function App() {
   };
 
   return <div className="app">
+    <input ref={originalInputRef} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp"
+      onChange={e => { const file = e.currentTarget.files?.[0]; if (file) void importOriginal(file); }} />
     <input ref={fileInputRef} className="sr-only" type="file" multiple
       accept=".psd,.json,image/png,image/jpeg,image/webp,image/gif"
       onChange={e => void processFiles(Array.from(e.currentTarget.files ?? []))} />
@@ -345,6 +347,7 @@ export default function App() {
       <div className="brand"><span className="brand-mark">◈</span><div><strong>LayerForge</strong><small>分层画布</small></div></div>
       <div className="top-actions">
         <button className="button primary" disabled={busy} onClick={() => fileInputRef.current?.click()}><C>＋</C> 打开 PSD / 导入素材</button>
+        <button className={`button ${quantityPanel ? 'success' : ''}`} onClick={() => { setQuantityPanel(v => !v); setTracing(false); setOutline([]); }}>▦ 数量精修</button>
         <span className="line" />
         <button className="button" disabled={busy} onClick={() => void runExport('json')}>保存项目</button>
         <button className="button" disabled={busy} onClick={() => void runExport('png')}>导出 PNG</button>
@@ -406,11 +409,26 @@ export default function App() {
           <div className="canvas-centering">
             <div className="canvas-board" style={{ width: project.width * zoom, height: project.height * zoom }}>
               <Stage width={project.width * zoom} height={project.height * zoom} scaleX={zoom} scaleY={zoom}
-                onMouseDown={e => { if (e.target === e.target.getStage()) setSelectedId(null); }}
-                onTouchStart={e => { if (e.target === e.target.getStage()) setSelectedId(null); }}>
+                onMouseDown={e => {
+                  if (tracing) { const pos = e.target.getStage()?.getPointerPosition();
+                    if (pos) setOutline(points => [...points, { x: Math.round(pos.x / zoom), y: Math.round(pos.y / zoom) }]);
+                  } else if (e.target === e.target.getStage()) setSelectedId(null);
+                }}
+                onTouchStart={e => {
+                  if (tracing) { const pos = e.target.getStage()?.getPointerPosition();
+                    if (pos) setOutline(points => [...points, { x: Math.round(pos.x / zoom), y: Math.round(pos.y / zoom) }]);
+                  } else if (e.target === e.target.getStage()) setSelectedId(null);
+                }}>
                 <KonvaLayer>
                   {[...project.layers].reverse().map(layer => <CanvasObject key={layer.id} layer={layer}
-                    selected={selectedId === layer.id} onSelect={setSelectedId} onChange={patchLayer} />)}
+                    selected={selectedId === layer.id} tracing={tracing} onSelect={setSelectedId} onChange={patchLayer} />)}
+                  {tracing && outline.length > 0 && <>
+                    <Line points={outline.flatMap(p => [p.x, p.y])} closed={outline.length > 2}
+                      stroke="#a6ff94" strokeWidth={2 / zoom} dash={[6 / zoom, 3 / zoom]}
+                      fill="rgba(166,255,148,.12)" listening={false} />
+                    {outline.map((p, i) => <Circle key={i} x={p.x} y={p.y} radius={4 / zoom}
+                      fill="#a6ff94" stroke="#1c2030" strokeWidth={1 / zoom} listening={false} />)}
+                  </>}
                 </KonvaLayer>
               </Stage>
             </div>
