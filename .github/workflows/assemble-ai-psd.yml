@@ -1,0 +1,42 @@
+name: Assemble AI packaging PSD
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.psd-transfer/**'
+      - '.github/workflows/assemble-ai-psd.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Reassemble and verify the PSD
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f .psd-transfer/chunk-000.b64 ]; then
+            echo "No transfer parts present; nothing to assemble"
+            exit 0
+          fi
+          count=$(find .psd-transfer -maxdepth 1 -name 'chunk-*.b64' | wc -l)
+          test "$count" -eq 20 || { echo "Expected 20 parts, got $count"; exit 1; }
+          mkdir -p assets/psd
+          cat .psd-transfer/chunk-*.b64 | base64 --decode > assets/psd/chemical-packaging-ai-20-bottles.psd
+          echo "bfce00d0ae15044740bdf139468dfb064e23c3e70a0b1735f619a385dc7e335e  assets/psd/chemical-packaging-ai-20-bottles.psd" | sha256sum -c -
+          test "$(wc -c < assets/psd/chemical-packaging-ai-20-bottles.psd)" -eq 14083942
+          test "$(head -c 4 assets/psd/chemical-packaging-ai-20-bottles.psd)" = '8BPS'
+      - name: Commit PSD and remove temporary transfer parts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f assets/psd/chemical-packaging-ai-20-bottles.psd ]; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add assets/psd/chemical-packaging-ai-20-bottles.psd
+          git rm -r .psd-transfer
+          git commit -m 'assets: add validated 27-layer AI photoreal packaging PSD'
+          git push origin HEAD:main
