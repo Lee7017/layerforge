@@ -9,6 +9,7 @@ export type LayerBase = {
   opacity: number;
   visible: boolean;
   locked: boolean;
+  quantityGroupId?: string; // Generated bottle identity for count checking
 };
 export type PictureLayer = LayerBase & { type: 'image'; src: string };
 export type TextLayer = LayerBase & {
@@ -19,6 +20,11 @@ export type ShapeLayer = LayerBase & {
   type: 'shape'; fill: string; radius: number;
 };
 export type EditorLayer = PictureLayer | TextLayer | ShapeLayer;
+export type QuantityLayout = {
+  groupId: string; sampleId: string; rows: number; columns: number;
+  originX: number; originY: number; itemWidth: number; itemHeight: number;
+  gapX: number; gapY: number; rowShiftX: number; columnShiftY: number; rowScale: number;
+};
 // layers[0] = topmost, same order as Photoshop's children array.
 export type Project = {
   version: 1;
@@ -26,6 +32,7 @@ export type Project = {
   width: number;
   height: number;
   layers: EditorLayer[];
+  quantity?: QuantityLayout; // Optional; older project JSON remains compatible
 };
 export const makeId = () => crypto.randomUUID();
 export const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
@@ -61,6 +68,17 @@ export function validProject(value: unknown): value is Project {
       (v.width as number) < 1 || (v.height as number) < 1 ||
       (v.width as number) > 12000 || (v.height as number) > 12000 ||
       !Array.isArray(v.layers) || v.layers.length > 500) return false;
+  if (v.quantity !== undefined) {
+    if (!v.quantity || typeof v.quantity !== 'object') return false;
+    const q = v.quantity as Record<string, unknown>;
+    if (typeof q.groupId !== 'string' || typeof q.sampleId !== 'string' ||
+        !['rows', 'columns', 'originX', 'originY', 'itemWidth', 'itemHeight', 'gapX', 'gapY', 'rowShiftX', 'columnShiftY', 'rowScale']
+          .every(k => typeof q[k] === 'number' && Number.isFinite(q[k]))) return false;
+    if (!Number.isInteger(q.rows) || !Number.isInteger(q.columns) ||
+        (q.rows as number) < 1 || (q.columns as number) < 1 || (q.rows as number) * (q.columns as number) > 120 ||
+        (q.itemWidth as number) < 1 || (q.itemHeight as number) < 1 ||
+        (q.rowScale as number) < .5 || (q.rowScale as number) > 1.5) return false;
+  }
   return v.layers.every((layer: unknown) => {
     if (!layer || typeof layer !== 'object') return false;
     const x = layer as Record<string, unknown>;
@@ -71,6 +89,7 @@ export function validProject(value: unknown): value is Project {
         (x.width as number) <= 0 || (x.height as number) <= 0 ||
         (x.width as number) > 30000 || (x.height as number) > 30000 ||
         (x.opacity as number) < 0 || (x.opacity as number) > 1) return false;
+    if (x.quantityGroupId !== undefined && typeof x.quantityGroupId !== 'string') return false;
     if (x.type === 'image') return typeof x.src === 'string' && /^data:image\//.test(x.src);
     if (x.type === 'text') return typeof x.text === 'string' && typeof x.color === 'string' &&
       typeof x.fontFamily === 'string' && typeof x.fontSize === 'number' && Number.isFinite(x.fontSize) &&
